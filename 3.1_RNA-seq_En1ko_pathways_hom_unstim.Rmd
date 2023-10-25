@@ -1,0 +1,327 @@
+---
+title: "Report EN1 ko transcriptome analysis, Pathway enrichment analysis using DEGs of unstimulated samples"
+author: "Sebastian Schmidt"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  rmarkdown::html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/sschm/OneDrive - Helmholtz Zentrum München/Manuscript Engrailed/sina_transcriptome/R_En1ko')
+
+library(knitr)
+library(readxl)
+library(clusterProfiler)
+library(enrichplot)
+library(devEMF)
+library(extrafont)
+library(ggplot2)
+library(org.Hs.eg.db)
+library(rmarkdown)
+library(DT)
+library(RColorBrewer)
+library(gridExtra)
+library(kableExtra)
+library(biomaRt)
+library(ggnewscale)
+library(ReactomePA)
+library(xlsx)
+
+d <- read.delim("results/tables/DEGs_unstim.txt", sep = "\t")
+gene <- d$symbol
+```
+
+
+# Enriched GO terms 
+
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+try(ego_CC <- enrichGO(gene          = gene,
+                
+                OrgDb         = org.Hs.eg.db,
+                ont           = "CC",
+                keyType = "SYMBOL",
+                pAdjustMethod = "fdr",
+                
+                qvalueCutoff  = 0.05,
+                readable      = FALSE))
+try(ego_BP <- enrichGO(gene          = gene,
+                  
+                   OrgDb         = org.Hs.eg.db,
+                   ont           = "BP",
+                   keyType = "SYMBOL",
+                   pAdjustMethod = "fdr",
+                   
+                   qvalueCutoff  = 0.05,
+                   readable      = FALSE))
+try(ego_MF <- enrichGO(gene          = gene,
+                   
+                   OrgDb         = org.Hs.eg.db,
+                   ont           = "MF",
+                   keyType = "SYMBOL",
+                   pAdjustMethod = "fdr",
+                   
+                   qvalueCutoff  = 0.05,
+                   readable      = FALSE))
+try(ego_ALL <- enrichGO(gene          = gene,
+                   
+                   OrgDb         = org.Hs.eg.db,
+                   ont           = "ALL",
+                   keyType = "SYMBOL",
+                   pAdjustMethod = "fdr",
+                   
+                   qvalueCutoff  = 0.05,
+                   readable      = FALSE))
+
+write.xlsx(ego_ALL, file = "results/tables/pathways_unstim.xlsx", sheetName = "GO", row.names = FALSE, append = TRUE)
+
+```
+
+## Tables {.tabset}
+### CC
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+datatable(as.data.frame(ego_CC), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+### biological process
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+datatable(as.data.frame(ego_BP), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+### molecular fuction
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+datatable(as.data.frame(ego_MF), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+
+```
+
+### All
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+datatable(as.data.frame(ego_ALL), extensions = c('Buttons', 'FixedColumns'), options = list(autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1), dom = 'Bfrtip', buttons = c('csv', 'excel')))
+
+```
+
+##  Dotplots {.tabset} 
+
+### CC
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=20}
+dotplot(ego_CC, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+### biological process 
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=20}
+dotplot(ego_BP, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+### molecular function 
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=20}
+dotplot(ego_MF, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+### ALL 
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=20}
+dotplot(ego_ALL, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+
+## Treeplots {.tabset} 
+
+### CC
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=15}
+p <- treeplot(pairwise_termsim(ego_CC), showCategory = 20, cluster.params = list(n = 8)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+```
+
+
+### Biological process
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=15}
+
+p <- treeplot(pairwise_termsim(ego_BP), showCategory = 20, cluster.params = list(n = 8)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+```
+
+
+### Molecular function
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=15}
+
+p <- treeplot(pairwise_termsim(ego_MF), showCategory = 20, cluster.params = list(n = 8)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+```
+
+
+### ALL
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=15}
+p <- treeplot(pairwise_termsim(ego_ALL), showCategory = 20, cluster.params = list(n = 8)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+emf("results/plots/unstim_eGO_ALL.emf",width = 10, height = 8, coordDPI = 400, family = "Arial") 
+p
+dev.off()
+```
+
+
+## Emapplot {.tabset} 
+### CC
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ego_CC), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+### BP
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ego_BP), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+### MF
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ego_MF), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+### ALL
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ego_ALL), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+
+
+
+# Enriched KEGG terms
+
+Gene identifier changed from HGNC symbol to EntrezID
+                
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+hs <- org.Hs.eg.db
+test <- select(hs, 
+       keys = gene,
+       columns = c("ENTREZID"),
+       keytype = "SYMBOL")
+geneEntrez <- test$ENTREZID
+ekegg <- enrichKEGG(gene         = geneEntrez,
+                   pvalueCutoff = 0.05)
+
+write.xlsx(ekegg, file = "results/tables/pathways_unstim.xlsx", sheetName = "KEGG", row.names = FALSE, append = TRUE)
+```
+
+Here are the enriched KEGG terms
+
+## Table
+```{r,echo = FALSE}
+datatable(as.data.frame(ekegg), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+## Dotplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+dotplot(ekegg, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+## Treeplot
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=15}
+
+p <- treeplot(pairwise_termsim(ekegg), showCategory = 20, cluster.params = list(n = 10)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+emf("results/plots/unstim_eKEGG.emf",width = 10, height = 8, coordDPI = 400, family = "Arial") 
+p
+dev.off()
+```
+
+## Emapplot
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ekegg), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+# Enriched Wikipathway terms
+
+Gene identifier changed from HGNC symbol to EntrezID
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE }
+ewp <- enrichWP(geneEntrez, organism = "Homo sapiens")
+
+write.xlsx(ewp, file = "results/tables/pathways_unstim.xlsx", sheetName = "WP", row.names = FALSE, append = TRUE)
+```
+Here are the enriched WP terms
+
+## Table
+```{r,echo = FALSE}
+datatable(as.data.frame(ewp), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+## Dotplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+dotplot(ewp, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+## Treeplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=5}
+
+p <- treeplot(pairwise_termsim(ewp), showCategory = 20, cluster.params = list(n = 5)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+emf("results/plots/unstim_eWP.emf",width = 10, height = 8, coordDPI = 400, family = "Arial") 
+p
+dev.off()
+
+```
+
+## Emapplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ewp), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+# Enriched Reactome terms
+
+Gene identifier changed from HGNC symbol to EntrezID
+
+```{r,echo = FALSE, warning=FALSE, message=FALSE}
+
+ereactome <- enrichPathway(gene=geneEntrez, pvalueCutoff = 0.05, readable=TRUE)
+
+
+write.xlsx(ereactome, file = "results/tables/pathways_unstim.xlsx", sheetName = "Reactome", row.names = FALSE, append = TRUE)
+```
+
+Here are the enriched Reactome terms
+
+## Table
+```{r,echo = FALSE}
+datatable(as.data.frame(ereactome), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+## Dotplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=10}
+dotplot(ereactome, showCategory = 20) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+## Treeplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=10}
+
+p <- treeplot(pairwise_termsim(ereactome), showCategory = 20, cluster.params = list(n = 8)) + scale_color_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+
+p
+emf("results/plots/unstim_eReactome.emf",width = 10, height = 8, coordDPI = 400, family = "Arial") 
+p
+dev.off()
+```
+
+## Emapplot
+```{r,echo = FALSE, warning=FALSE, message=FALSE, fig.width=30, fig.height=30}
+emapplot(pairwise_termsim(ereactome), showCategory = 200) + scale_fill_gradientn(name = "p.adjust", colours = c( "red", "blue"))
+```
+
+

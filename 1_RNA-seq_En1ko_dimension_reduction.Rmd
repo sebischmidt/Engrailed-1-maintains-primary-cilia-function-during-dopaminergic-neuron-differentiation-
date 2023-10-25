@@ -1,0 +1,474 @@
+---
+VignetteBuilder: knitr
+Suggests: BiocStyle, knitr, rmarkdown
+title: "Report EN1 ko transcriptome analysis, dimension reduction"
+author: "Sebastian Schmidt"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  rmarkdown::html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/sschm/OneDrive - Helmholtz Zentrum München/Manuscript Engrailed/sina_transcriptome/R_En1ko')
+
+#load libraries
+
+library(ggbiplot)
+library(DT)
+library(ggplot2)
+library(Rtsne)
+library(RColorBrewer)
+library(pheatmap)
+library(DESeq2)
+library(gridExtra)
+library(kableExtra)
+library(biomaRt)
+library(readxl)
+library(devEMF)
+library(devtools)
+library(tidyverse)
+
+#specifiy location of input files
+length_file <- "data/featurelength_en1koexport.tabular"
+count_matrix_file <- "data/countmatrix.txt"
+
+sample_summary_file <- "data/samples.xlsx"
+
+
+```
+
+# Loading of data and normalization
+
+***
+
+## Count matrix
+
+First, we load the count matrix, and compute TPM normalization.
+
+```{r, echo = FALSE, include = FALSE, warning = FALSE}
+#############################################
+## Load count matrix and tidy it
+
+# generate vector with conditions and with samples (will be used later)
+sample_summary <- as.matrix(read_xlsx(sample_summary_file))
+rownames(sample_summary) <- sample_summary[,1]
+sample_summary <- as.data.frame(sample_summary[,-1])
+
+
+# read count matrix
+count_matrix <- read.table(count_matrix_file, sep = "\t", header = T, check.names = FALSE)
+
+# assign rownames
+rownames(count_matrix) <- count_matrix[,1]
+
+# now we can get rid of first column
+count_matrix <- count_matrix[,-1]
+
+```
+
+This is how our count matrix looks like (first 1000 rows, to speed things up):
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+# we only show the table with the first 1000 rows, to speed things up.
+
+datatable(as.data.frame(count_matrix)[1:1000,], extensions = c('Buttons'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE), caption = htmltools::tags$caption(style = 'caption-side: bottom; text-align: center;', 'Table 1: ', htmltools::em('Count matrix')))
+
+```
+
+This is the number of reads per sample:
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+
+#show number of reads per sample
+a <- colSums(count_matrix); a
+
+write.table(a, "results/tables/reads_per_sample.txt", sep = "\t")
+```
+
+## Transcripts per million (TPM) normalization
+
+We compute the transcripts per million normalization. This is how it looks like (first 1000 rows, to speed things up):
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+
+## TPM normalizations
+
+# Read the gene - length file
+feature_length <- read.table(length_file, sep = "\t", header = T, stringsAsFactors = F)
+
+# Create a named vector with the length in kb
+length_kb = feature_length$Length / 1000
+names(length_kb) = feature_length$Geneid
+
+# Divide the read counts by the length of each gene in kilobases. This gives you reads per kilobase (RPK).
+matchedelements=match( rownames(count_matrix) , names(length_kb))
+
+# we can do some checks
+#length(matchedelements)
+#dim(count_matrix)
+#sum(is.na(matchedelements))
+#count_matrix[1,]
+#length_kb[58961]
+
+# Divide matrix rows by length in kb for each gene
+# Reads per kilobase (RPK) matrix
+rpk_matrix <- apply(count_matrix, 2, "/", length_kb[matchedelements])
+
+# Count up all the RPK values in a sample
+rpk_factor <- colSums(rpk_matrix)
+
+# and divide each value of the samples (columns) by this factor.
+tpm_matrix <- t(apply(rpk_matrix, 1, "/", rpk_factor))
+
+# Finally, multiply by 1 million
+tpm_matrix <- tpm_matrix * 1E6
+
+
+
+
+write.table(tpm_matrix, "results/tables/count_matrix_tpm.txt", sep = "\t")
+```
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+# we only show the table with the first 1000 rows, to speed things up.
+
+datatable(as.data.frame(tpm_matrix)[1:1000,], extensions = c('Buttons'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE), caption = htmltools::tags$caption(style = 'caption-side: bottom; text-align: center;', 'Table 4: ', htmltools::em('TPM matrix')))
+
+```
+
+Each sample should sum up to 1-million:
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+colSums(tpm_matrix)
+```
+
+
+# Principal component analysis {.tabset}
+
+Looks quite good. Variation between replicates of same clone is low. Separation mainly by genotype or stimulation. Only wt clone 18-3 seems to be a outlier (unstimulated dataset) and was removed for downstream analysis.
+
+## Unstimulated samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="PCA", fig.show="hold", out.width="30%"}
+#calculate pca
+
+
+sample_summary_unstim <- sample_summary[,1:24]
+conditions_unstim <- as.character(as.vector(sample_summary_unstim[2,]))
+stimulation_unstim <- as.character(as.vector(sample_summary_unstim[1,]))
+samples_unstim <- as.character(as.vector(sample_summary_unstim[5,]))
+
+tpm_matrix_unstim <- tpm_matrix[,1:24]
+
+
+tpm_matrix_unstim_pca <- tpm_matrix_unstim[rowMeans(tpm_matrix_unstim) != 0, ]
+pca_unstim <- prcomp(t(na.omit(tpm_matrix_unstim_pca)), center = TRUE, scale = TRUE)
+
+#create plots
+
+pca_condition <- ggbiplot(pca_unstim, choices = c(1,2), ellipse=TRUE, groups=conditions_unstim, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = conditions_unstim)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_condition_unstimulated.pdf",pca_condition, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+pca_stimulation <- ggbiplot(pca_unstim, choices = c(1,2), ellipse=TRUE, groups=stimulation_unstim, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = stimulation_unstim)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_stimulation_unstimulated.pdf",pca_stimulation, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+pca_samples <- ggbiplot(pca_unstim, choices = c(1,2), ellipse=TRUE, groups=samples_unstim, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = samples_unstim)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_samples_unstimulated.pdf",pca_samples, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+plot(pca_condition)
+plot(pca_stimulation)
+plot(pca_samples)
+
+```
+```{r, include = FALSE}
+#remove 18-3
+count_matrix <- count_matrix[,-c(22,23,24,46,47,48)]
+tpm_matrix <- tpm_matrix[,-c(22,23,24,46,47,48)]
+sample_summary <- sample_summary[,-c(22,23,24,46,47,48)]
+
+
+sample_summary_unstim <- sample_summary[,1:21]
+conditions_unstim <- as.character(as.vector(sample_summary_unstim[2,]))
+stimulation_unstim <- as.character(as.vector(sample_summary_unstim[1,]))
+samples_unstim <- as.character(as.vector(sample_summary_unstim[5,]))
+
+tpm_matrix_unstim <- tpm_matrix[,1:21]
+
+sample_summary_stim <- sample_summary[,22:42]
+conditions_stim <- as.character(as.vector(sample_summary_stim[2,]))
+stimulation_stim <- as.character(as.vector(sample_summary_stim[1,]))
+samples_stim <- as.character(as.vector(sample_summary_stim[5,]))
+
+tpm_matrix_stim <- tpm_matrix[,22:42]
+
+```
+
+
+## Stimulated samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="PCA", fig.show="hold", out.width="30%"}
+#calculate pca
+
+
+tpm_matrix_stim_pca <- tpm_matrix_stim[rowMeans(tpm_matrix_stim) != 0, ]
+pca_stim <- prcomp(t(na.omit(tpm_matrix_stim_pca)), center = TRUE, scale = TRUE)
+
+#create plots
+
+pca_condition <- ggbiplot(pca_stim, choices = c(1,2), ellipse=TRUE, groups=conditions_stim, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = conditions_stim)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_condition_stimulated.pdf",pca_condition, device = "pdf", height = 15, width = 15, units = "cm")
+
+pca_stimulation <- ggbiplot(pca_stim, choices = c(1,2), ellipse=TRUE, groups=stimulation_stim, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = stimulation_stim)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_stimulation_stimulated.pdf",pca_stimulation, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+pca_samples <- ggbiplot(pca_stim, choices = c(1,2), ellipse=TRUE, groups=samples_stim, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = samples_stim)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_samples_stimulated.pdf",pca_samples, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+plot(pca_condition)
+plot(pca_stimulation)
+plot(pca_samples)
+
+```
+
+## Comparison - Stimulated vs unstimulated samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="PCA", fig.show="hold", out.width="30%"}
+#calculate pca
+
+
+conditions <- as.character(as.vector(sample_summary[2,]))
+stimulation <- as.character(as.vector(sample_summary[1,]))
+samples <- as.character(as.vector(sample_summary[5,]))
+
+tpm_matrix_pca <- tpm_matrix[rowMeans(tpm_matrix) != 0, ]
+pca <- prcomp(t(na.omit(tpm_matrix_pca)), center = TRUE, scale = TRUE)
+
+#create plots
+
+pca_condition <- ggbiplot(pca, choices = c(1,2), ellipse=TRUE, groups=conditions, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = conditions)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_condition_comparison.pdf",pca_condition, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+pca_stimulation <- ggbiplot(pca, choices = c(1,2), ellipse=TRUE, groups=stimulation, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = stimulation)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_stimulation_comparison.pdf",pca_stimulation, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+pca_samples <- ggbiplot(pca, choices = c(1,2), ellipse=TRUE, groups=samples, var.axes = FALSE) +
+  geom_jitter(size = 2.5, aes(color = samples)) + 
+  theme_classic() +
+  theme(axis.text.x = element_text(color="black"),
+        axis.ticks = element_line(color="black"),
+        axis.text.y = element_text(color="black"))+
+  xlim(-2.5,2.5)+
+  ylim(-2.5,2.5)
+ggsave("results/plots/PCA_samples_comparison.pdf",pca_samples, device = "pdf", height = 15, width = 15, units = "cm", dpi = 400)
+
+plot(pca_condition)
+plot(pca_stimulation)
+plot(pca_samples)
+
+```
+
+# Clustering and correlation between sample 
+
+Next, we perform clustering and correlation analysis, and plot these results in a couple of heatmaps.
+
+## Unstimulated samples {.tabset}
+
+### Distance matrix, followed by clustering
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="Heatmap of distances"}
+#calculate distances between samples
+sampleDists <- dist(t(tpm_matrix_unstim))
+
+#tidy matrix
+sampleDistMatrix <- as.matrix(sampleDists)
+
+#make a vector with colors and then plot heatmap
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+annotation_col = data.frame(
+  Stimulation = stimulation_unstim, 
+  Condition = conditions_unstim
+)
+rownames(annotation_col) = colnames(tpm_matrix_unstim)
+
+dist_heatmap_tpm <- pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors,
+         annotation_col = annotation_col)
+
+emf("results/plots/dist_heatmap_tpm_unstimulated.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=20, height=20, family= "Arial") 
+dist_heatmap_tpm
+dev.off()
+
+
+```
+
+### Correlation between samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, , fig.cap="Heatmap of correlations"}
+
+#calculate correlations between samples
+sampleDists <- cor(tpm_matrix_unstim)
+
+#tidy matrix
+sampleDistMatrix <- as.matrix(sampleDists)
+
+
+#make a vector with colors and then plot heatmap
+colors <- colorRampPalette(brewer.pal(9, "Blues"))(255)
+cor_heatmap_tpm <- pheatmap(sampleDistMatrix, col=colors,  annotation_col = annotation_col)
+
+emf("results/plots/cor_heatmap_tpm_unstimulated.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=20, height=20, family= "Arial") 
+cor_heatmap_tpm
+dev.off()
+
+```
+
+### Hierarchical clustering of the samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="Hierarchical clustering"}
+###################################
+#simple hierarchical clustering using distances
+clusters <- hclust(dist(t(tpm_matrix_unstim)))
+plot(clusters, labels = colnames(tpm_matrix_unstim))
+
+emf("results/plots/hirachical_clustering_unstimulated.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=15, height=5, family= "Arial") 
+plot(clusters, labels = colnames(tpm_matrix_unstim))
+dev.off()
+
+```
+## Stimulated samples {.tabset}
+
+### Distance matrix, followed by clustering
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="Heatmap of distances"}
+#calculate distances between samples
+sampleDists <- dist(t(tpm_matrix_stim))
+
+#tidy matrix
+sampleDistMatrix <- as.matrix(sampleDists)
+
+#make a vector with colors and then plot heatmap
+colors <- colorRampPalette( rev(brewer.pal(9, "Blues")) )(255)
+annotation_col = data.frame(
+  Stimulation = stimulation_stim, 
+  Condition = conditions_stim
+)
+rownames(annotation_col) = colnames(tpm_matrix_stim)
+
+dist_heatmap_tpm <- pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors,
+         annotation_col = annotation_col)
+
+emf("results/plots/dist_heatmap_tpm_stimulated.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=20, height=20, family= "Arial") 
+dist_heatmap_tpm
+dev.off()
+
+
+```
+
+### Correlation between samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, , fig.cap="Heatmap of correlations"}
+
+#calculate correlations between samples
+sampleDists <- cor(tpm_matrix_stim)
+
+#tidy matrix
+sampleDistMatrix <- as.matrix(sampleDists)
+
+
+#make a vector with colors and then plot heatmap
+colors <- colorRampPalette(brewer.pal(9, "Blues"))(255)
+cor_heatmap_tpm <- pheatmap(sampleDistMatrix, col=colors,  annotation_col = annotation_col)
+
+emf("results/plots/cor_heatmap_tpm_stimulated.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=20, height=20, family= "Arial") 
+cor_heatmap_tpm
+dev.off()
+
+```
+
+### Hierarchical clustering of the samples
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, fig.cap="Hierarchical clustering"}
+###################################
+#simple hierarchical clustering using distances
+clusters <- hclust(dist(t(tpm_matrix_stim)))
+plot(clusters, labels = colnames(tpm_matrix_stim))
+
+emf("results/plots/hirachical_clustering_stimulated.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=15, height=5, family= "Arial") 
+plot(clusters, labels = colnames(tpm_matrix_stim))
+dev.off()
+
+```
+
