@@ -1,0 +1,443 @@
+---
+VignetteBuilder: knitr
+Suggests: BiocStyle, knitr, rmarkdown
+title: "Report EN1 ko transcriptome analysis, differential expression analysis unstimulated vs stimulated"
+author: "Sebastian Schmidt"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  rmarkdown::html_document:
+    theme: cosmo
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    number_sections: TRUE
+---
+
+```{r setup, include=FALSE}
+#if you want to change the look of your report, just browse to https://bootswatch.com/ and select a theme. Then type the name of the theme above, instead of 'cosmo'!
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/sschm/OneDrive - Helmholtz Zentrum München/Manuscript Engrailed/sina_transcriptome/R_En1ko')
+#load libraries
+
+library(DT)
+library(ggplot2)
+library(Rtsne)
+library(RColorBrewer)
+library(pheatmap)
+library(DESeq2)
+library(gridExtra)
+library(kableExtra)
+library(biomaRt)
+library(readxl)
+library(devEMF)
+library(EnhancedVolcano)
+library(xlsx)
+
+#specifiy location of input files
+length_file <- "data/featurelength_en1koexport.tabular"
+count_matrix_file <- "data/countmatrix.txt"
+
+sample_summary_file <- "data/samples.xlsx"
+
+```
+
+# Loading of data and normalization
+
+***
+
+## Count matrix
+
+First, we load the count matrix.
+
+```{r, echo = FALSE, include = FALSE, warning = FALSE}
+#############################################
+# Load count matrix and tidy it
+
+# generate vector with conditions and with samples (will be used later)
+sample_summary <- as.data.frame(read_xlsx(sample_summary_file))
+rownames(sample_summary) <- sample_summary[,1]
+sample_summary <- sample_summary[,-1]
+
+sample_summary <- sample_summary[,-c(22,23,24,46,47,48)] #remove clone 18-3
+
+# read count matrix
+count_matrix <- read.table(count_matrix_file, sep = "\t", header = T, check.names = FALSE)
+
+# assign rownames
+rownames(count_matrix) <- count_matrix[,1]
+
+# now we can get rid of first column
+count_matrix <- count_matrix[,-1]
+
+count_matrix <- count_matrix[,-c(22,23,24,46,47,48)] #remove clone 18-3
+
+
+#filter for Ctrl and EN1 ko
+count_matrix <- t(count_matrix)
+sample_summary <- as.data.frame(t(sample_summary))
+
+count_matrix_ctrl <- t(count_matrix[sample_summary$condition == "ctrl",])
+sample_summary_ctrl <- t(sample_summary[sample_summary$condition == "ctrl",])
+
+count_matrix_ko_hom <- t(count_matrix[sample_summary$condition == "ko_hom",])
+sample_summary_ko_hom <- t(sample_summary[sample_summary$condition == "ko_hom",])
+
+count_matrix <- t(count_matrix)
+sample_summary <- t(sample_summary)
+
+```
+
+This is how the full count matrix looks like (first 100 rows, to speed things up):
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+datatable(as.data.frame(count_matrix)[1:100,], extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+This is how the full sample matrix looks like
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+datatable(as.data.frame(sample_summary), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+
+
+This is how the count matrix for the Ctrl samples - unstimulated and Wnt stimulated - looks like (first 100 rows, to speed things up):
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+datatable(as.data.frame(count_matrix_ctrl)[1:100,], extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+This is how the sample matrix for the Ctrl samples - unstimulated and Wnt stimulated - looks like
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+datatable(as.data.frame(sample_summary_ctrl), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+
+
+This is how the count matrix for the EN1 ko samples - unstimulated and Wnt stimulated - looks like (first 100 rows, to speed things up):
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+datatable(as.data.frame(count_matrix_ctrl)[1:100,], extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+This is how the sample matrix for the EN1 ko samples - unstimulated and Wnt stimulated - looks like
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+datatable(as.data.frame(sample_summary_ctrl), extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+```
+
+
+# Differential expression analysis for ctrl lines - unstimulated vs. Wnt stimulated
+***
+We performed a differential gene expression analysis using DESeq2.
+
+## Differential expression analysis with DESeq2
+
+This is how our experimental design table looks like for the Ctrl samples - unstimulated and Wnt stimulated. 
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+#############################################
+#############################################
+## Differential expression analyses
+
+sample_names_ctrl <- as.character(as.vector(colnames(sample_summary_ctrl)))
+conditions_ctrl <- as.character(as.vector(sample_summary_ctrl[2,]))
+stimulation_ctrl <- as.character(as.vector(sample_summary_ctrl[1,]))
+samples_ctrl <- as.character(as.vector(sample_summary_ctrl[5,]))
+clone_ctrl <- as.character(as.vector(sample_summary_ctrl[3,]))
+replicate_ctrl <- as.character(as.vector(sample_summary_ctrl[4,]))
+clone.n_ctrl <- as.character(as.vector(sample_summary_ctrl[6,]))
+#make a data frame with the experimental design
+expDesign_ctrl = data.frame(sample = colnames(count_matrix_ctrl), 
+                       stimulation = stimulation_ctrl, 
+                       clone = clone_ctrl,
+                       replicate = replicate_ctrl,
+                       clone.n = clone.n_ctrl)                    
+kable(expDesign_ctrl) %>% kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+We will perform a DEG analysis using a nested approach (design = ~clone.n + clone.n:replicate + stimulation) to compensate for dependencies / replicates within the groups.
+
+```{r, echo = FALSE, include = FALSE, warning = FALSE}
+#Ctrl
+dds_ctrl_nested <- DESeqDataSetFromMatrix(countData = count_matrix_ctrl, colData = expDesign_ctrl, design = ~clone.n + clone.n:replicate + stimulation)
+
+filter = 10
+keep <- apply(count_matrix_ctrl, 1, min) > filter
+dds_ctrl_nested <- dds_ctrl_nested[keep,]
+
+dds_ctrl_nested <- DESeq(dds_ctrl_nested)
+
+res_ctrl_nested = results(dds_ctrl_nested, contrast = c("stimulation", "stim", "unstim"))
+res_ctrl_nested <- res_ctrl_nested[order(res_ctrl_nested$log2FoldChange),]
+
+
+```
+
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+# We want to add a column with the gene symbol and a description to table
+
+mart = useDataset("hsapiens_gene_ensembl", useEnsembl(biomart="ensembl", version=98))
+
+#ctrl
+genes <- sapply(strsplit(rownames(res_ctrl_nested),"[.]"), `[`, 1)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "hgnc_symbol", "description"),values=genes,mart=mart)
+res_ctrl_nested$symbol = G_list[match(genes, G_list$ensembl_gene_id),]$hgnc_symbol
+res_ctrl_nested$description = G_list[match(genes, G_list$ensembl_gene_id),]$description
+#write.xlsx(res_ctrl_nested, file = "results/tables/DEGs_unstim-vs-stim_full.xlsx", sheetName = "Ctrl_unstim-vs-stim")
+
+# Filter the results P-value < 0.05
+diff_exp_genes_ctrl_nested = res_ctrl_nested[which(res_ctrl_nested$padj < 0.05),]
+#write.xlsx(diff_exp_genes_ctrl_nested, file = "results/tables/DEGs_unstim-vs-stim.xlsx", sheetName = "Ctrl_unstim-vs-stim")
+```
+
+
+And these are the results of our differential gene expression analysis for the Ctrl samples - unstimulated and Wnt stimulated (top 100 DEGs). Only genes with a significant adjusted p-value and no fold change threshold are shown.
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+
+datatable(as.data.frame(diff_exp_genes_ctrl_nested)[1:100,], extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+
+```
+
+## Visualization of DEGs {.tabset .tabset-fade .tabset-pills}
+
+Next, we employ a number of visualization methods
+
+### MA-plot
+```{r, echo = FALSE, include = TRUE, warning = FALSE, dev = "jpeg"}
+
+plotMA(res_ctrl_nested, alpha = 0.01, main="DESeq2 MA plot, alpha=0.01")
+
+```
+
+### Vulcano-plot
+```{r, echo = FALSE, include = TRUE, warning = FALSE, dev = "jpeg"}
+
+label <- c("EN1", "EN2", "SP5", "DLK1", "SLC16A3", "EPHA3", "HOXB9", "OLIG2", "MAOA", "SPARCL1")
+Volcano <- EnhancedVolcano(toptable = res_ctrl_nested,
+                title = "",
+                subtitle = "",
+                lab = res_ctrl_nested$symbol, 
+                x = "log2FoldChange", y = "padj", 
+                
+                pCutoff = 0.05,
+                FCcutoff = 1,
+                pointSize = 2.0,
+                gridlines.major = FALSE,
+                colConnectors = "black",
+                selectLab = label,
+                labCol = "black",
+                drawConnectors = TRUE
+) 
+
+Volcano
+
+emf("results/plots/Volcano_unstim-vs-stim_ctrl.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=7, height=10, family= "Arial") 
+Volcano
+dev.off()
+```
+
+### Heatmap
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, dev = "jpeg"}
+# Lets create some annotations for the columns
+mat_col <- data.frame(stimulation = stimulation_ctrl)
+rownames(mat_col) <- sample_names_ctrl
+
+# List with colors for each annotation.
+mat_colors <- list(stimulation = c("red","darkblue"))
+names(mat_colors$stimulation) <- c("unstim","stim")
+
+# TPM Matrix / Transform to log2 values
+feature_length <- read.table(length_file, sep = "\t", header = T, stringsAsFactors = F)
+
+length_kb = feature_length$Length / 1000
+names(length_kb) = feature_length$Geneid
+
+matchedelements=match( rownames(count_matrix_ctrl) , names(length_kb))
+
+rpk_matrix <- apply(count_matrix_ctrl, 2, "/", length_kb[matchedelements])
+
+rpk_factor <- colSums(rpk_matrix)
+
+tpm_matrix <- t(apply(rpk_matrix, 1, "/", rpk_factor))
+
+tpm_matrix <- tpm_matrix * 1E6
+
+
+tpm_matrixL2 <- log2(tpm_matrix+1)
+
+tpm_matrixL2 <- tpm_matrixL2[match(rownames(diff_exp_genes_ctrl_nested), rownames(tpm_matrixL2)),]
+
+# Scale the rows
+tpm_matrixL2=t(scale(t(tpm_matrixL2)))
+rownames(tpm_matrixL2) = NULL
+
+# Plot the heatmap
+heatmap <- pheatmap(tpm_matrixL2, annotation_col=mat_col,  annotation_colors = mat_colors,cluster_rows = T, cluster_cols = F)
+
+
+emf("results/plots/heatmap_unstim-vs-stim_ctrl.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=7, height=5, family= "Arial") 
+heatmap
+dev.off()
+
+```
+
+
+# Differential expression analysis for EN1 ko lines - unstimulated vs. Wnt stimulated
+***
+We performed a differential gene expression analysis using DESeq2.
+
+## Differential expression analysis with DESeq2
+
+This is how our experimental design table looks like for the EN1 ko samples - unstimulated and Wnt stimulated.
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE}
+#############################################
+#############################################
+## Differential expression analyses
+
+sample_names_ko_hom <- as.character(as.vector(colnames(sample_summary_ko_hom)))
+conditions_ko_hom <- as.character(as.vector(sample_summary_ko_hom[2,]))
+stimulation_ko_hom <- as.character(as.vector(sample_summary_ko_hom[1,]))
+samples_ko_hom <- as.character(as.vector(sample_summary_ko_hom[5,]))
+clone_ko_hom <- as.character(as.vector(sample_summary_ko_hom[3,]))
+replicate_ko_hom <- as.character(as.vector(sample_summary_ko_hom[4,]))
+clone.n_ko_hom <- as.character(as.vector(sample_summary_ko_hom[6,]))
+#make a data frame with the experimental design
+expDesign_ko_hom = data.frame(sample = colnames(count_matrix_ko_hom), 
+                       stimulation = stimulation_ko_hom, 
+                       clone = clone_ko_hom,
+                       replicate = replicate_ko_hom,
+                       clone.n = clone.n_ko_hom)                    
+kable(expDesign_ko_hom) %>% kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+We will perform a DEG analysis using a nested approach (design = ~clone.n + clone.n:replicate + stimulation) to compensate for dependencies / replicates within the groups.
+
+```{r, echo = FALSE, include = FALSE, warning = FALSE}
+
+#ko_hom
+dds_ko_hom_nested <- DESeqDataSetFromMatrix(countData = count_matrix_ko_hom, colData = expDesign_ko_hom, design = ~clone.n + clone.n:replicate + stimulation)
+
+filter = 10
+keep <- apply(count_matrix_ko_hom, 1, min) > filter
+dds_ko_hom_nested <- dds_ko_hom_nested[keep,]
+
+dds_ko_hom_nested <- DESeq(dds_ko_hom_nested)
+
+res_hom_nested = results(dds_ko_hom_nested, contrast = c("stimulation", "stim", "unstim"))
+res_hom_nested <- res_hom_nested[order(res_hom_nested$log2FoldChange),]
+
+
+```
+
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+#hom
+genes <- sapply(strsplit(rownames(res_hom_nested),"[.]"), `[`, 1)
+G_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id", "hgnc_symbol", "description"),values=genes,mart=mart)
+res_hom_nested$symbol = G_list[match(genes, G_list$ensembl_gene_id),]$hgnc_symbol
+res_hom_nested$description = G_list[match(genes, G_list$ensembl_gene_id),]$description
+#write.xlsx(res_hom_nested, file = "results/tables/DEGs_unstim-vs-stim_full.xlsx", sheetName = "EN1ko_unstim-vs-stim", append = TRUE)
+
+# Filter the results P-value < 0.05
+diff_exp_genes_hom_nested = res_hom_nested[which(res_hom_nested$padj < 0.05),]
+#write.xlsx(diff_exp_genes_hom_nested, file = "results/tables/DEGs_unstim-vs-stim.xlsx", sheetName = "EN1ko_unstim-vs-stim", append = TRUE)
+
+```
+
+And these are the results of our differential gene expression analysis for homozygous EN1 ko clones unstimulated vs stimulated (top 100 DEGs). Only genes with a signficant adjusted p-value and no fold change threshold are shown.
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, message=FALSE}
+
+datatable(as.data.frame(diff_exp_genes_hom_nested)[1:100,], extensions = c('Buttons', 'FixedColumns'), options = list(dom = 'Bfrtip', buttons = c('csv', 'excel'), autoWidth = TRUE, scrollX = TRUE, fixedColumns = list(rightColumns = 1)))
+
+```
+
+
+## Visualization of DEGs {.tabset .tabset-fade .tabset-pills}
+
+Next, we employ a number of visualization methods. 
+
+### MA-plot
+```{r, echo = FALSE, include = TRUE, warning = FALSE, dev = "jpeg"}
+
+plotMA(res_hom_nested, alpha = 0.01, main="DESeq2 MA plot, alpha=0.01")
+```
+
+### Vulcano-plot
+```{r, echo = FALSE, include = TRUE, warning = FALSE, dev = "jpeg"}
+
+Volcano <- EnhancedVolcano(toptable = res_hom_nested,
+                title = "",
+                subtitle = "",
+                lab = res_hom_nested$symbol, 
+                x = "log2FoldChange", y = "padj", 
+                
+                pCutoff = 0.05,
+                FCcutoff = 1,
+                pointSize = 2.0,
+                gridlines.major = FALSE,
+                colConnectors = "black",
+                selectLab = label,
+                labCol = "black",
+                drawConnectors = TRUE
+) 
+
+Volcano
+
+emf("results/plots/Volcano_unstim-vs-stim_EN1ko.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=7, height=10, family= "Arial") 
+Volcano
+dev.off()
+```
+
+### Heatmap
+
+```{r, echo = FALSE, include = TRUE, warning = FALSE, dev = "jpeg"}
+# Lets create some annotations for the columns
+mat_col <- data.frame(stimulation = stimulation_ko_hom)
+rownames(mat_col) <- sample_names_ko_hom
+
+# List with colors for each annotation.
+mat_colors <- list(stimulation = c("red","darkblue"))
+names(mat_colors$stimulation) <- c("unstim","stim")
+
+# TPM Matrix / Transform to log2 values
+feature_length <- read.table(length_file, sep = "\t", header = T, stringsAsFactors = F)
+
+length_kb = feature_length$Length / 1000
+names(length_kb) = feature_length$Geneid
+
+matchedelements=match( rownames(count_matrix_ko_hom) , names(length_kb))
+
+rpk_matrix <- apply(count_matrix_ko_hom, 2, "/", length_kb[matchedelements])
+
+rpk_factor <- colSums(rpk_matrix)
+
+tpm_matrix <- t(apply(rpk_matrix, 1, "/", rpk_factor))
+
+tpm_matrix <- tpm_matrix * 1E6
+
+tpm_matrixL2 <- log2(tpm_matrix+1)
+tpm_matrixL2 <- tpm_matrixL2[match(rownames(diff_exp_genes_hom_nested), rownames(tpm_matrixL2)),]
+
+# Scale the rows
+tpm_matrixL2=t(scale(t(tpm_matrixL2)))
+rownames(tpm_matrixL2) = NULL
+
+# Plot the heatmap
+heatmap <- pheatmap(tpm_matrixL2, annotation_col=mat_col,  annotation_colors = mat_colors,cluster_rows = T, cluster_cols = F)
+
+
+emf("results/plots/heatmap_unstim-vs-stim_EN1ko.emf", emfPlus= FALSE, coordDPI = 400, 
+    width=7, height=5, family= "Arial") 
+heatmap
+dev.off()
+
+```
